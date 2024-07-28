@@ -9,7 +9,17 @@
 /////////////////////////////
 /////// PIN SETTINGS ////////
 /////////////////////////////
-int buzzer = 12;
+int buzzer = 7;
+
+#define RELAY 12
+
+#define BTN_LED_1 A0
+#define BTN_LED_2 A1
+#define BTN_LED_3 A2
+
+#define BTN_1 A3
+#define BTN_2 3 //Cant continue onto A4 and A5 because of SDA and SCL for Realtime clock module
+#define BTN_3 2
 
 //Display settings
 #define TFT_CS 10
@@ -130,16 +140,25 @@ class Alarm {
     }
 };
 
-bool alarmDays[7] = {false, false, false, false, false, false, false};
-Alarm defaultAlarm(alarmDays, 0, 0);
+//bool alarmDays[7] = {false, false, false, false, false, false, false};
+//Alarm defaultAlarm(alarmDays, 0, 0);
 
 Alarm alarms[10];
 
 void setup() {
+  pinMode(BTN_LED_1, OUTPUT);
+  pinMode(BTN_LED_2, OUTPUT);
+  pinMode(BTN_LED_3, OUTPUT);
+
+  pinMode(BTN_1, INPUT_PULLUP);
+  pinMode(BTN_2, INPUT_PULLUP);
+  pinMode(BTN_3, INPUT_PULLUP);
+
   //Initialize the alarms.
-  initializeAlarms(alarms, sizeof(alarms), 1); //Initialize at address 1 to leave 0 for "Is already set?" marker;
+  initializeAlarms(alarms, sizeof(alarms) / sizeof(Alarm), 1); //Initialize at address 1 to leave 0 for "Is already set?" marker;
 
   Serial.begin(115200);
+  Serial.println("Started.");
 
   rtc.begin();
   tft.begin();
@@ -152,15 +171,15 @@ void loop() {
     uint8_t currentHour = rtc.getHour();
     uint8_t currentMinute = rtc.getMinute();
 
-    
+    Serial.println(currentDay);
 
     for(int i = 0; i < sizeof(alarms); i++){
       if(alarms[i].isEnabled()){
-        if (defaultAlarm.checkIfTimeMatches(currentDay, currentHour, currentMinute)) {
-          Serial.println("IT IS TIME!");
-          playAlarm();
-        } else {
-          Serial.println("You can keep sleeping...");
+        if (alarms[i].checkIfTimeMatches(currentDay, currentHour, currentMinute)) {
+          while(!checkIfAlarmHasBeenTurnedOff()){
+            Serial.println("IT IS TIME!");
+            playAlarm();
+          }
         }
       }
     }
@@ -168,7 +187,19 @@ void loop() {
     Serial.println("Failed to get time");
   }
 
-  delay(5000);
+  if(digitalRead(BTN_1) == LOW){
+    Serial.println("ALARM SET!");
+
+    bool days[7] = {true, true, true, true, true, true, true};
+    alarms[0].setAlarm(days, rtc.getHour(), rtc.getMinute());
+  }
+
+  delay(2000);
+}
+
+
+bool checkIfAlarmHasBeenTurnedOff(){
+  return digitalRead(BTN_3) == LOW;
 }
 
 // Function to save an array of alarms to EEPROM
@@ -207,6 +238,10 @@ void playAlarm(){
   // iterate over the notes of the melody.
   // Remember, the array is twice the number of notes (notes + durations)
   for (int thisNote = 0; thisNote < notes * 2; thisNote = thisNote + 2) {
+
+    if(checkIfAlarmHasBeenTurnedOff()){
+      break;
+    }
 
     // calculates the duration of each note
     divider = melody[thisNote + 1];

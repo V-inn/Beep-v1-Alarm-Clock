@@ -1,15 +1,17 @@
 #include <EEPROM.h>
 #include <Bonezegei_DS3231.h>
-#include "NotesAndSongs.h"
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <TFT_ILI9163C.h>
 #include <MD_MAX72xx.h>
 
+#include "NotesAndSongs.h"
+#include "Alarm.h" //Alarm class
+
 /////////////////////////////
 /////// PIN SETTINGS ////////
 /////////////////////////////
-int buzzer = 7;
+#define buzzer 7
 
 #define RELAY 12
 
@@ -31,12 +33,15 @@ int buzzer = 7;
 #define MAX7219_CS 5
 #define MAX7219_CLK 4
 
+//END OF PIN SETTINGS
 /////////////////////////////
 
 //LED MATRIX SETTINGS
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW //Hardware configuration may need to be changed according to different led matrixes
                                           //Refer to https://majicdesigns.github.io/MD_MAX72XX/page_new_hardware.html for more info.
 #define MAX_DEVICES 4
+#define CHAR_SPACING  1 // pixels between characters
+
 
 //Device initialization
 TFT_ILI9163C tft = TFT_ILI9163C(TFT_CS, TFT_DC, TFT_RST);
@@ -58,91 +63,11 @@ int divider = 0, noteDuration = 0;
 
 /*----------------------------------------------*/
 
-class Alarm {
-  private:
-    bool days[7]; // The weekdays the alarm goes off
-    uint8_t hour; // The hour the alarm goes off
-    uint8_t minute; // The minute the alarm goes off
-    bool enabled; //Alarm will only play if enabled
-
-  public:
-    //Default constructor
-    Alarm() {
-      for (int i = 0; i < 7; i++) {
-        this->days[i] = false;
-      }
-      this->hour = 0;
-      this->minute = 0;
-      this->enabled = false;
-    }
-
-    // Parameterized Constructor
-    Alarm(bool days[7], uint8_t hour, uint8_t minute) {
-      for (int i = 0; i < 7; i++) {
-        this->days[i] = days[i];
-      }
-      this->hour = hour;
-      this->minute = minute;
-      this->enabled = true;
-    }
-
-    void setEnabled(bool enabled){
-      this->enabled = enabled;
-    }
-
-    bool isEnabled(){
-      return enabled;
-    }
-
-    bool checkIfTimeMatches(uint8_t day, uint8_t hour, uint8_t minute) {
-      if (this->hour != hour) {
-        return false;
-      }
-
-      if (this->minute != minute) {
-        return false;
-      }
-
-      if (this->days[day - 1]) {
-        return true;
-      }
-
-      return false;
-    }
-
-    void setAlarm(bool days[7], uint8_t hour, uint8_t minute){
-      for (int i = 0; i < 7; i++) {
-        this->days[i] = days[i];
-      }
-      this->hour = hour;
-      this->minute = minute;
-      this->enabled = true;
-    }
-
-    // Method to save the alarm to EEPROM
-    void saveToEEPROM(int startAddress) {
-      for (int i = 0; i < 7; i++) {
-        EEPROM.write(startAddress + i, days[i]);
-      }
-      EEPROM.write(startAddress + 7, hour);
-      EEPROM.write(startAddress + 8, minute);
-      EEPROM.write(startAddress + 9, enabled);
-    }
-
-    // Method to load the alarm from EEPROM
-    void loadFromEEPROM(int startAddress) {
-      for (int i = 0; i < 7; i++) {
-        days[i] = EEPROM.read(startAddress + i);
-      }
-      hour = EEPROM.read(startAddress + 7);
-      minute = EEPROM.read(startAddress + 8);
-      enabled = EEPROM.read(startAddress + 9);
-    }
-};
-
 //bool alarmDays[7] = {false, false, false, false, false, false, false};
 //Alarm defaultAlarm(alarmDays, 0, 0);
 
+//Defining quantity of alarms.
+//MAXIMUM IN MEMORY IS 102 (1024 bytes - 1 from marker = 1023 / 10 bytes per Alarm = 102.3), BUT MAY NEED ADJUSTMENTS TO FIT DISPLAY.
 Alarm alarms[10];
 
 void setup() {
@@ -163,35 +88,52 @@ void setup() {
   rtc.begin();
   tft.begin();
   mx.begin();
+
+  tft.clearScreen();
+  displayAlarm(0);
 }
 
 void loop() {
-  if (rtc.getTime()) { // Ensure the RTC time is read
+  if(rtc.getTime()){ // Update RTC time
     uint8_t currentDay = rtc.getDay();
     uint8_t currentHour = rtc.getHour();
     uint8_t currentMinute = rtc.getMinute();
 
-    Serial.println(currentDay);
+    static unsigned long lastUpdate = 0;
+    unsigned long currentMillis = millis();
 
-    for(int i = 0; i < sizeof(alarms); i++){
-      if(alarms[i].isEnabled()){
+    char buffer[7];
+    sprintf(buffer, " %02d:%02d", rtc.getHour(), rtc.getMinute());
+
+    Serial.println(buffer);
+
+    if (currentMillis - lastUpdate >= 2000) {
+      mxPrint(buffer);
+      lastUpdate = currentMillis;
+    }
+
+    for (int i = 0; i < sizeof(alarms) / sizeof(alarms[0]); i++) {
+      if (alarms[i].getEnabled()) {
         if (alarms[i].checkIfTimeMatches(currentDay, currentHour, currentMinute)) {
-          while(!checkIfAlarmHasBeenTurnedOff()){
+          while (!checkIfAlarmHasBeenTurnedOff()) {
             Serial.println("IT IS TIME!");
-            playAlarm();
+            //playAlarm();
           }
         }
       }
     }
-  } else {
-    Serial.println("Failed to get time");
   }
 
-  if(digitalRead(BTN_1) == LOW){
+  if(digitalRead(BTN_1) == LOW) {
     Serial.println("ALARM SET!");
 
     bool days[7] = {true, true, true, true, true, true, true};
     alarms[0].setAlarm(days, rtc.getHour(), rtc.getMinute());
+
+    alarms[0].setEnabled(false);
+
+    displayAlarm(0);
+    //beginAlarmDefinition();
   }
 
   delay(2000);
@@ -199,7 +141,7 @@ void loop() {
 
 
 bool checkIfAlarmHasBeenTurnedOff(){
-  return digitalRead(BTN_3) == LOW;
+  return digitalRead(BTN_1) == LOW;
 }
 
 // Function to save an array of alarms to EEPROM
@@ -222,6 +164,7 @@ void loadAlarmsFromEEPROM(Alarm alarms[], int numAlarms, int startAddress) {
 void initializeAlarms(Alarm alarms[], int numAlarms, int startAddress) {
   // Check if alarms have already been initialized
   if (EEPROM.read(0) != 0xAA) { // 0xAA is a marker value
+    Serial.println("Saving alarms to eeprom.");
     // Save alarms to EEPROM
     saveAlarmsToEEPROM(alarms, numAlarms, startAddress);
     // Set the marker value
@@ -263,4 +206,102 @@ void playAlarm(){
     // stop the waveform generation before the next note.
     noTone(buzzer);
   }
+}
+
+void beginAlarmDefinition(){
+  uint8_t currentSelected = 0;
+
+  displayAlarm(currentSelected);
+}
+
+void displayAlarm(uint8_t index) {
+  Serial.println("Displaying alarm");
+
+  SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE0));
+
+  tft.clearScreen();
+
+  Alarm alarm = alarms[index];
+  char firstLine[12];
+  sprintf(firstLine, "Alarm: %02d/%02d", index+1, sizeof(alarms)/sizeof(Alarm));
+
+  tft.setCursor(0, 1);
+  tft.print(firstLine);
+  tft.setCursor(0, 10);
+  tft.print("Alarm Time: ");
+  tft.print(alarm.getHour());
+  tft.print(":");
+  if (alarm.getMinute() < 10) tft.print("0");
+  tft.print(alarm.getMinute());
+
+  tft.setCursor(0, 30);
+  tft.print("Enabled: ");
+  tft.print(alarm.getEnabled() ? "Yes" : "No");
+
+  tft.setCursor(0, 50);
+  tft.print("Days: ");
+  tft.setCursor(5, 60);
+  const char* dayNames[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+  bool* days = alarm.getDays();
+  for (int i = 0; i < 7; i++) {
+    if (days[i]) {
+      tft.print(dayNames[i]);
+      tft.print(" ");
+    }
+  }
+
+  SPI.endTransaction();
+}
+
+void mxPrint(const char *pMsg) {
+  uint8_t   state = 0;
+  uint8_t   curLen;
+  uint16_t  showLen;
+  uint8_t   cBuf[8];
+  int16_t   col = (MAX_DEVICES * COL_SIZE) - 1;
+
+  mx.control(0, MAX_DEVICES - 1, MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
+  mx.clear();
+
+  do {
+    switch(state) {
+      case 0: // Load the next character from the font table
+        if (*pMsg == '\0') {
+          showLen = col - (MAX_DEVICES * COL_SIZE);  // padding characters
+          state = 2;
+          break;
+        }
+
+        showLen = mx.getChar(*pMsg++, sizeof(cBuf)/sizeof(cBuf[0]), cBuf);
+        curLen = 0;
+        state++;
+        // Fall through to next state to start displaying
+
+      case 1: // Display the next part of the character
+        mx.setColumn(col--, cBuf[curLen++]);
+
+        if (curLen == showLen) {
+          showLen = CHAR_SPACING;
+          state = 2;
+        }
+        break;
+
+      case 2: // Initialize state for displaying empty columns
+        curLen = 0;
+        state++;
+        // Fall through
+
+      case 3: // Display inter-character spacing or end of message padding (blank columns)
+        mx.setColumn(col--, 0);
+        curLen++;
+        if (curLen == showLen)
+          state = 0;
+        break;
+
+      default:
+        col = -1;   // This definitely ends the do loop
+    }
+  } while (col >= 0);
+
+  mx.control(0, MAX_DEVICES - 1, MD_MAX72XX::UPDATE, MD_MAX72XX::ON);
 }

@@ -4,9 +4,13 @@
 #include <Adafruit_GFX.h>
 #include <TFT_ILI9163C.h>
 #include <MD_MAX72xx.h>
+#include <ButtonDebounce.h>
 
 #include "NotesAndSongs.h"
 #include "Alarm.h" //Alarm class
+
+#define TFT_GREEN 0x3cc0
+#define TFT_RED 0xf800
 
 /////////////////////////////
 /////// PIN SETTINGS ////////
@@ -20,8 +24,8 @@
 #define BTN_LED_3 A2
 
 #define BTN_1 A3
-#define BTN_2 3 //Cant continue onto A4 and A5 because of SDA and SCL for Realtime clock module
-#define BTN_3 2
+#define BTN_2 2 //Cant continue onto A4 and A5 because of SDA and SCL for Realtime clock module
+#define BTN_3 3
 
 //Display settings
 #define TFT_CS 10
@@ -36,17 +40,19 @@
 //END OF PIN SETTINGS
 /////////////////////////////
 
+//BUTTON DEBOUNCE SETTINGS
+const unsigned long debounceDelay = 110; // Debounce time in milliseconds
+
+// Create ButtonDebounce objects
+ButtonDebounce btn1(BTN_1, debounceDelay);
+ButtonDebounce btn2(BTN_2, debounceDelay);
+ButtonDebounce btn3(BTN_3, debounceDelay);
+
 //LED MATRIX SETTINGS
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW //Hardware configuration may need to be changed according to different led matrixes
                                           //Refer to https://majicdesigns.github.io/MD_MAX72XX/page_new_hardware.html for more info.
 #define MAX_DEVICES 4
 #define CHAR_SPACING  1 // pixels between characters
-
-
-//Device initialization
-TFT_ILI9163C tft = TFT_ILI9163C(TFT_CS, TFT_DC, TFT_RST);
-MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, MAX7219_DIN, MAX7219_CLK, MAX7219_CS, MAX_DEVICES);
-Bonezegei_DS3231 rtc(0x68);
 
 /*---------------SOUNDS SETTINGS----------------*/
 // change this to make the song slower or faster
@@ -63,12 +69,19 @@ int divider = 0, noteDuration = 0;
 
 /*----------------------------------------------*/
 
+//Device initialization
+TFT_ILI9163C tft = TFT_ILI9163C(TFT_CS, TFT_DC, TFT_RST);
+MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, MAX7219_DIN, MAX7219_CLK, MAX7219_CS, MAX_DEVICES);
+Bonezegei_DS3231 rtc(0x68);
+
 //bool alarmDays[7] = {false, false, false, false, false, false, false};
 //Alarm defaultAlarm(alarmDays, 0, 0);
 
 //Defining quantity of alarms.
 //MAXIMUM IN MEMORY IS 102 (1024 bytes - 1 from marker = 1023 / 10 bytes per Alarm = 102.3), BUT MAY NEED ADJUSTMENTS TO FIT DISPLAY.
 Alarm alarms[10];
+
+uint8_t MAX_ALARM = sizeof(alarms)/sizeof(Alarm);
 
 void setup() {
   pinMode(BTN_LED_1, OUTPUT);
@@ -80,7 +93,7 @@ void setup() {
   pinMode(BTN_3, INPUT_PULLUP);
 
   //Initialize the alarms.
-  initializeAlarms(alarms, sizeof(alarms) / sizeof(Alarm), 1); //Initialize at address 1 to leave 0 for "Is already set?" marker;
+  initializeAlarms(alarms, MAX_ALARM, 1); //Initialize at address 1 to leave 0 for "Is already set?" marker;
 
   Serial.begin(115200);
   Serial.println("Started.");
@@ -112,7 +125,7 @@ void loop() {
       lastUpdate = currentMillis;
     }
 
-    for (int i = 0; i < sizeof(alarms) / sizeof(alarms[0]); i++) {
+    for (int i = 0; i < MAX_ALARM; i++) {
       if (alarms[i].getEnabled()) {
         if (alarms[i].checkIfTimeMatches(currentDay, currentHour, currentMinute)) {
           while (!checkIfAlarmHasBeenTurnedOff()) {
@@ -127,18 +140,17 @@ void loop() {
   if(digitalRead(BTN_1) == LOW) {
     Serial.println("ALARM SET!");
 
-    bool days[7] = {true, true, true, true, true, true, true};
+    bool days[7] = {true, true, true, true, true, false, false};
     alarms[0].setAlarm(days, rtc.getHour(), rtc.getMinute());
 
     alarms[0].setEnabled(false);
 
-    displayAlarm(0);
-    //beginAlarmDefinition();
+    //displayAlarm(0);
+    beginAlarmDefinition();
   }
 
   delay(2000);
 }
-
 
 bool checkIfAlarmHasBeenTurnedOff(){
   return digitalRead(BTN_1) == LOW;
@@ -208,10 +220,110 @@ void playAlarm(){
   }
 }
 
-void beginAlarmDefinition(){
-  uint8_t currentSelected = 0;
+void beginAlarmDefinition() {
+  uint8_t MAX_OPTION = 3;
 
-  displayAlarm(currentSelected);
+  uint8_t currentAlarm = 0;
+  uint8_t currentOption = 0;
+  bool selected = false;
+  bool hadChange = false;
+
+  displayAlarm(currentAlarm);
+
+  while (true) {
+    btn1.update();
+    btn2.update();
+    btn3.update();
+
+    if (digitalRead(BTN_1) == LOW && digitalRead(BTN_2) == LOW) {
+      break;
+    }
+
+    if (btn1.state() == LOW) {
+      if (currentOption == 0) {
+        currentOption = MAX_OPTION;
+      } else {
+        currentOption -= 1;
+      }
+      hadChange = true;
+    }
+    else if (btn2.state() == LOW) {
+      selected = !selected;
+      hadChange = true;
+    }
+    else if (btn3.state() == LOW) {
+      if (currentOption == MAX_OPTION) {
+        currentOption = 0;
+      } else {
+        currentOption += 1;
+      }
+      hadChange = true;
+    }
+
+    if (hadChange) {
+      if (selected) {
+        switch (currentOption) {
+          case 0:
+            delay(200);
+            while(true){
+              btn1.update();
+              btn2.update();
+              btn3.update();
+
+              if (btn1.state() == LOW) {
+                if (currentOption == 0) {
+                  currentAlarm = MAX_ALARM - 1;
+                } else {
+                  currentAlarm -= 1;
+                }
+
+                displayAlarm(currentAlarm);
+              }
+              else if (btn2.state() == LOW) {
+                break;
+              }
+              else if (btn3.state() == LOW) {
+                if (currentAlarm == MAX_OPTION - 1) {
+                  currentAlarm = 0;
+                } else {
+                  currentAlarm += 1;
+                }
+
+                displayAlarm(currentAlarm);
+              }
+
+              delay(200);
+            }
+          case 1:
+            break;
+          case 2:
+            break;
+          case 3:
+            break;
+        }
+        Serial.println("Was selected");
+      } else {
+        switch (currentOption) {
+          case 0:
+            break;
+          case 1:
+            break;
+          case 2:
+            break;
+          case 3:
+            break;
+        }
+      }
+      Serial.println("Had change");
+      Serial.println(currentOption);
+      Serial.println(selected);
+      hadChange = false;
+    }
+
+    delay(100); // Reduce if faster response time is needed.
+  }
+
+  Serial.println("EXITED LOOP");
 }
 
 void displayAlarm(uint8_t index) {
@@ -220,34 +332,37 @@ void displayAlarm(uint8_t index) {
   SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE0));
 
   tft.clearScreen();
+  tft.setTextColor(0xFFFF);
 
   Alarm alarm = alarms[index];
-  char firstLine[12];
-  sprintf(firstLine, "Alarm: %02d/%02d", index+1, sizeof(alarms)/sizeof(Alarm));
+  char firstLine[13];
+  sprintf(firstLine, "Alarm: %02d/%02d", index+1, MAX_ALARM);
 
-  tft.setCursor(0, 1);
+  tft.setCursor(10, 1);
   tft.print(firstLine);
-  tft.setCursor(0, 10);
+  tft.setCursor(10, 10);
   tft.print("Alarm Time: ");
   tft.print(alarm.getHour());
   tft.print(":");
   if (alarm.getMinute() < 10) tft.print("0");
   tft.print(alarm.getMinute());
 
-  tft.setCursor(0, 30);
+  tft.setCursor(10, 30);
   tft.print("Enabled: ");
   tft.print(alarm.getEnabled() ? "Yes" : "No");
 
-  tft.setCursor(0, 50);
+  tft.setCursor(10, 50);
   tft.print("Days: ");
-  tft.setCursor(5, 60);
-  const char* dayNames[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+  const char* dayNames[7] = {"M", "T", "W", "T", "F", "S", "S"};
   bool* days = alarm.getDays();
   for (int i = 0; i < 7; i++) {
     if (days[i]) {
-      tft.print(dayNames[i]);
-      tft.print(" ");
+      tft.setTextColor(TFT_GREEN);
+    }else{
+      tft.setTextColor(TFT_RED);
     }
+    tft.print(dayNames[i]);
+    tft.print(" ");
   }
 
   SPI.endTransaction();

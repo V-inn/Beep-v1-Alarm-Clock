@@ -79,6 +79,8 @@ class Alarm {
     // }
 
     void setAlarm(bool days[7], uint8_t hour, uint8_t minute){
+      Serial.println("Setting alarm");
+
       for (int i = 0; i < 7; i++) {
         this->days[i] = days[i];
       }

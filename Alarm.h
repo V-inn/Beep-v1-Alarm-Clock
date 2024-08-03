@@ -89,6 +89,10 @@ class Alarm {
       this->enabled = true;
     }
 
+    void enableDisableDay(uint8_t day){
+      this->days[day] = !this->days[day];
+    }
+
     // Method to save the alarm to EEPROM
     void saveToEEPROM(int startAddress) {
       for (int i = 0; i < 7; i++) {

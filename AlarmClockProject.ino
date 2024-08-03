@@ -135,13 +135,13 @@ void loop() {
 
     alarms[0].setEnabled(false);
 
-    //displayAlarm(0);
     alarmDefinition();
   }
 
   delay(2000);
 }
 
+//Runs a check for disabling the alarm
 bool checkIfAlarmHasBeenTurnedOff(){
   return digitalRead(BTN_1) == LOW;
 }
@@ -177,6 +177,7 @@ void initializeAlarms(Alarm alarms[], int numAlarms, int startAddress) {
   }
 }
 
+//Plays the alarm.
 void playAlarm(){
   //By Robson Couto
 
@@ -251,7 +252,6 @@ void alarmDefinition() {
     currentExecute = millis();
 
     if(debounce(lastExecute, currentExecute)){
-
       if (digitalRead(BTN_1) == LOW && digitalRead(BTN_2) == LOW) {
         buttonOnHold(BTN_1);
         break;
@@ -291,6 +291,7 @@ void alarmDefinition() {
   tft.clearScreen();
 }
 
+//Calls and shows visually the selected element.
 void displayChange(){
   Serial.println("Button pressed!");
   if (selected) {
@@ -339,6 +340,7 @@ void displayChange(){
   buttonOnHold(lastButton);
 }
 
+//Option for switching between selected alarm.
 void selected_zero(){
   buttonOnHold(lastButton);
   drawPointer(1,1);
@@ -347,6 +349,8 @@ void selected_zero(){
     currentExecute = millis();
 
     if(debounce(lastExecute, currentExecute)){
+
+
       if(digitalRead(BTN_1) == LOW && digitalRead(BTN_2) == LOW){
         buttonOnHold(BTN_1);
         break;
@@ -381,6 +385,7 @@ void selected_one(){
   
 }
 
+//Option for enabling or disabling the selected alarm
 void selected_two(){
   alarms[currentAlarm].setEnabled(!alarms[currentAlarm].getEnabled());
 
@@ -391,17 +396,29 @@ void selected_two(){
   tft.print(alarms[currentAlarm].getEnabled() ? "Yes" : "No");
 }
 
+//Option for changing weekdays
 void selected_three(){
+  buttonOnHold(lastButton);
+
   //Days go monday to sunday.
   const uint8_t MAX_WEEK_DAY = 6; //Array equivalent of the 7th element.
   uint8_t selectedWeekday = 0;
+
+  //Pointer spacing constants
+  const uint8_t pointerY = 60;
+  const uint8_t startingXForElementPointer = 44;
+  const uint8_t pixelsBetweenLetters = 12;
+
+  bool hadChange = false;
+  drawVerticalPointer(startingXForElementPointer, pointerY);
 
   while (true) {
     currentExecute = millis();
 
     if(debounce(lastExecute, currentExecute)){
-
       if (digitalRead(BTN_1) == LOW && digitalRead(BTN_2) == LOW) {
+        tft.fillRect(startingXForElementPointer, pointerY, 82, 5, 0x0000);
+        buttonOnHold(BTN_1);
         break;
       }
 
@@ -409,15 +426,18 @@ void selected_three(){
         if (selectedWeekday == 0) {
           selectedWeekday = MAX_WEEK_DAY;
         } else {
-          currentOption -= 1;
+          selectedWeekday -= 1;
         }
-
+        hadChange = true;
         lastButton = BTN_1;
       }
       else if (digitalRead(BTN_2) == LOW) {
+        alarms[currentAlarm].enableDisableDay(selectedWeekday);
 
+        tft.fillRect(10, 50, 118, 8, 0x0000); //Fill the entire row of weekdays.
+        drawWeekdays(alarms[currentAlarm]);
 
-        lastButton = BTN_2;
+        buttonOnHold(BTN_2);
       }
       else if (digitalRead(BTN_3) == LOW) {
         if (selectedWeekday == MAX_WEEK_DAY) {
@@ -425,22 +445,58 @@ void selected_three(){
         } else {
           selectedWeekday += 1;
         }
-
+        hadChange = true;
         lastButton = BTN_3;
       }
 
-      buttonOnHold(lastButton);
+
+      if(hadChange){
+        Serial.println("Changed weekday");
+
+        hadChange = false;
+        tft.fillRect(startingXForElementPointer, pointerY, 82, 5, 0x0000);
+
+        uint8_t currentX = startingXForElementPointer + (selectedWeekday * pixelsBetweenLetters);
+        drawVerticalPointer(currentX, pointerY);
+
+        buttonOnHold(lastButton);
+      }
     }
   }
 }
-
 ////////////////////////////////////////////////////
 
+//Draws the option selector pointer.
 void drawPointer(uint8_t x, uint8_t y){
   tft.fillRect(0, 0, 6, 65, 0x0000);
-  tft.fillTriangle(x, y, x+4, y+4, x, y+8, 0xFFFF);
+  tft.fillTriangle(x, y, x+4, y+4, x, y+8, 0xffff);
 }
 
+//Draws the element selection pointer for options that require it.
+void drawVerticalPointer(uint8_t x, uint8_t y){
+  tft.fillTriangle(x, y+4, x+4, y, x+8, y+4, 0xffff);
+}
+
+//Draws the weekdays row.
+void drawWeekdays(Alarm alarm){
+  tft.setCursor(10, 50);
+
+  tft.setTextColor(0xffff);
+  tft.print("Days: ");
+  const char* dayNames[7] = {"M", "T", "W", "T", "F", "S", "S"};
+  bool* days = alarm.getDays();
+  for (int i = 0; i < 7; i++) {
+    if (days[i]) {
+      tft.setTextColor(TFT_GREEN);
+    }else{
+      tft.setTextColor(TFT_RED);
+    }
+    tft.print(dayNames[i]);
+    tft.print(" ");
+  }
+}
+
+//Displays the alarm object to screen
 void displayAlarm(uint8_t index) {
   tft.clearScreen();
 
@@ -465,21 +521,10 @@ void displayAlarm(uint8_t index) {
   tft.print("Enabled: ");
   tft.print(alarm.getEnabled() ? "Yes" : "No");
 
-  tft.setCursor(10, 50);
-  tft.print("Days: ");
-  const char* dayNames[7] = {"M", "T", "W", "T", "F", "S", "S"};
-  bool* days = alarm.getDays();
-  for (int i = 0; i < 7; i++) {
-    if (days[i]) {
-      tft.setTextColor(TFT_GREEN);
-    }else{
-      tft.setTextColor(TFT_RED);
-    }
-    tft.print(dayNames[i]);
-    tft.print(" ");
-  }
+  drawWeekdays(alarm);
 }
 
+//Writes a message to the led Matrix
 void mxPrint(const char *pMsg) {
   uint8_t   state = 0;
   uint8_t   curLen;

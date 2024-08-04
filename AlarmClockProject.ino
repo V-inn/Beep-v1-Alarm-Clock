@@ -11,12 +11,25 @@
 #define TFT_GREEN 0x3cc0
 #define TFT_RED 0xf800
 
+//How many button presses to turn off the alarm:
+const uint8_t challengeTurns = 8;
+const uint16_t timeLedIsOn = 600;
+
+uint8_t randomSequence[challengeTurns];
+
+//Increments and decrements for the alarm definition.
+const uint8_t incrementByHour = 1;
+const uint8_t incrementByMinute = 1;
+
 /////////////////////////////
 /////// PIN SETTINGS ////////
 /////////////////////////////
-#define buzzer 7
 
-#define RELAY 12
+//I absolutely hate pin 12, it has caused me so many issues.
+//Had to give up on the relay for turning on the room's light because of interference with SPI and lack of power.
+//#define RELAY 12
+
+#define buzzer 7
 
 #define BTN_LED_1 A0
 #define BTN_LED_2 A1
@@ -74,6 +87,13 @@ Alarm alarms[10];
 
 const uint8_t MAX_ALARM = sizeof(alarms)/sizeof(Alarm);
 
+unsigned long lastExecute = 0;
+unsigned long currentExecute = millis();
+
+unsigned long alarmCooldown = 0;
+
+bool alwaysShowTime = false;
+
 void setup() {
   pinMode(BTN_LED_1, OUTPUT);
   pinMode(BTN_LED_2, OUTPUT);
@@ -86,9 +106,6 @@ void setup() {
   //Initialize the alarms.
   initializeAlarms(alarms, MAX_ALARM, 1); //Initialize at address 1 to leave 0 for "Is already set?" marker;
 
-  Serial.begin(115200);
-  Serial.println("Started.");
-
   rtc.begin();
   tft.begin();
   mx.begin();
@@ -97,30 +114,42 @@ void setup() {
 }
 
 void loop() {
-  if(rtc.getTime()){ // Update RTC time
-    uint8_t currentDay = rtc.getDay();
-    uint8_t currentHour = rtc.getHour();
-    uint8_t currentMinute = rtc.getMinute();
+  currentExecute = millis();
 
-    static unsigned long lastUpdate = 0;
-    unsigned long currentMillis = millis();
+  if(currentExecute - lastExecute > 3000){
+    lastExecute = millis();
 
-    char buffer[7];
-    sprintf(buffer, " %02d:%02d", rtc.getHour(), rtc.getMinute());
+    if(rtc.getTime()){ // Update RTC time
+      uint8_t currentDay = rtc.getDay();
+      uint8_t currentHour = rtc.getHour();
+      uint8_t currentMinute = rtc.getMinute();
 
-    Serial.println(buffer);
+      if(alwaysShowTime){
+        writeHourToLEDMatrix(currentHour, currentMinute);
+      }else{
+          mxPrint("");
+      }
 
-    if (currentMillis - lastUpdate >= 2000) {
-      mxPrint(buffer);
-      lastUpdate = currentMillis;
-    }
+      for (int i = 0; i < MAX_ALARM; i++) {
+        if (alarms[i].getEnabled()) {
+          if (alarms[i].checkIfTimeMatches(currentDay, currentHour, currentMinute)) {
+            if(currentExecute - alarmCooldown > 60000){
+              generateRandomSequence(challengeTurns, randomSequence);
 
-    for (int i = 0; i < MAX_ALARM; i++) {
-      if (alarms[i].getEnabled()) {
-        if (alarms[i].checkIfTimeMatches(currentDay, currentHour, currentMinute)) {
-          while (!checkIfAlarmHasBeenTurnedOff()) {
-            Serial.println("IT IS TIME!");
-            //playAlarm();
+              while (true) {
+                writeHourToLEDMatrix(rtc.getHour(), rtc.getMinute());
+                //digitalWrite(RELAY, HIGH);
+
+                if(playAlarm()){ //If alarm gets turned off it returns true.
+                  break;
+                }
+              }
+
+              mxPrint("");
+
+              //Sets a cooldown so alarm doesn't play right after turning off.
+              alarmCooldown = millis();
+            }
           }
         }
       }
@@ -128,22 +157,28 @@ void loop() {
   }
 
   if(digitalRead(BTN_1) == LOW) {
-    Serial.println("ALARM SET!");
-
-    bool days[7] = {true, true, true, true, true, false, false};
-    alarms[0].setAlarm(days, rtc.getHour(), rtc.getMinute());
-
-    alarms[0].setEnabled(false);
-
     alarmDefinition();
   }
+  else if(digitalRead(BTN_2) == LOW){
+    alwaysShowTime = !alwaysShowTime;
 
-  delay(2000);
+    if(alwaysShowTime && rtc.getTime()){
+        writeHourToLEDMatrix(rtc.getHour(), rtc.getMinute());
+    }else{
+        mxPrint("");
+    }
+    delay(50);
+    buttonOnHold(BTN_2);
+  }
 }
 
-//Runs a check for disabling the alarm
-bool checkIfAlarmHasBeenTurnedOff(){
-  return digitalRead(BTN_1) == LOW;
+//Generates a random button sequence for buttons 1, 2 and 3.
+void generateRandomSequence(uint8_t length, uint8_t *array) {
+  randomSeed(analogRead(A5));
+
+  for (uint8_t i = 0; i < length; i++) {
+    array[i] = random(1, 4); // Generate a random number between 1 and 3
+  }
 }
 
 // Function to save an array of alarms to EEPROM
@@ -166,7 +201,6 @@ void loadAlarmsFromEEPROM(Alarm alarms[], int numAlarms, int startAddress) {
 void initializeAlarms(Alarm alarms[], int numAlarms, int startAddress) {
   // Check if alarms have already been initialized
   if (EEPROM.read(0) != 0xAA) { // 0xAA is a marker value
-    Serial.println("Saving alarms to eeprom.");
     // Save alarms to EEPROM
     saveAlarmsToEEPROM(alarms, numAlarms, startAddress);
     // Set the marker value
@@ -178,15 +212,16 @@ void initializeAlarms(Alarm alarms[], int numAlarms, int startAddress) {
 }
 
 //Plays the alarm.
-void playAlarm(){
-  //By Robson Couto
+bool playAlarm(){
+  //Music function By Robson Couto
 
   // iterate over the notes of the melody.
   // Remember, the array is twice the number of notes (notes + durations)
   for (int thisNote = 0; thisNote < notes * 2; thisNote = thisNote + 2) {
 
+    //Checks if the alarm is disabled midway through the music
     if(checkIfAlarmHasBeenTurnedOff()){
-      break;
+      return true;
     }
 
     // calculates the duration of each note
@@ -209,6 +244,8 @@ void playAlarm(){
     // stop the waveform generation before the next note.
     noTone(buzzer);
   }
+
+  return false;
 }
 
 ///////////////////////////////////////////////////////
@@ -227,15 +264,10 @@ bool debounce(unsigned long& lastTime, unsigned long time){
 }
 
 void buttonOnHold(byte Button){
-  bool buttonState = digitalRead(Button);
-  while(buttonState == digitalRead(Button)){
-    buttonState = digitalRead(Button);
+  while(digitalRead(Button) == LOW){
     delay(1);
   }
 }
-
-unsigned long lastExecute = 0;
-unsigned long currentExecute = 0;
 
 const uint8_t MAX_OPTION = 3;
 uint8_t currentAlarm = 0;
@@ -243,6 +275,140 @@ uint8_t currentOption = 0;
 
 bool selected = false;
 uint8_t lastButton = 0;
+
+//Shows the button pattern on the leds.
+void showRandomPattern(){
+  for(int i = 0; i < challengeTurns; i++){
+    switch(randomSequence[i]){
+      case 1:
+        digitalWrite(BTN_LED_1, HIGH);
+        delay(timeLedIsOn);
+        digitalWrite(BTN_LED_1, LOW);
+        break;
+      case 2:
+        digitalWrite(BTN_LED_2, HIGH);
+        delay(timeLedIsOn);
+        digitalWrite(BTN_LED_2, LOW);
+        break;
+      case 3:
+        digitalWrite(BTN_LED_3, HIGH);
+        delay(timeLedIsOn);
+        digitalWrite(BTN_LED_3, LOW);
+        break;
+    }
+
+    delay(200);
+  }
+}
+
+//Runs a check for disabling the alarm
+bool checkIfAlarmHasBeenTurnedOff(){
+  if(digitalRead(BTN_1) == LOW){
+    delay(50);
+    buttonOnHold(BTN_1);
+
+    //digitalWrite(RELAY, LOW);
+
+    showRandomPattern();
+
+    uint8_t userInputPattern[challengeTurns];
+
+    for(int i = 0; i < challengeTurns; i++){
+      userInputPattern[i] = 0;
+    }
+
+    uint8_t currentIndex = 0;
+    bool hadChange = false;
+
+    while(true){
+      currentExecute = millis();
+
+      if(debounce(lastExecute, currentExecute)){
+        if(digitalRead(BTN_1) == LOW){
+          userInputPattern[currentIndex] = 1;
+          hadChange = true;
+          lastButton = BTN_1;
+        }else if(digitalRead(BTN_2) == LOW){
+          userInputPattern[currentIndex] = 2;
+          hadChange = true;
+          lastButton = BTN_2;
+        }else if(digitalRead(BTN_3) == LOW){
+          userInputPattern[currentIndex] = 3;
+          hadChange = true;
+          lastButton = BTN_3;
+        }
+
+        if(hadChange){
+          hadChange = false;
+          buttonOnHold(lastButton);
+
+          if(randomSequence[currentIndex] != userInputPattern[currentIndex]){
+            currentIndex = 0;
+            for(int i = 0; i < challengeTurns; i++){
+              userInputPattern[i] = 0;
+            }
+
+            tone(buzzer, 300, 700);
+
+            delay(1500);
+
+            showRandomPattern();
+          }else{
+            currentIndex++;
+          }
+        }
+
+        if(currentIndex == challengeTurns){
+          digitalWrite(BTN_LED_1, HIGH);
+          digitalWrite(BTN_LED_2, HIGH);
+          digitalWrite(BTN_LED_3, HIGH);
+
+          tone(buzzer, 800);
+          
+          delay(800);
+
+          digitalWrite(BTN_LED_1, LOW);
+          digitalWrite(BTN_LED_2, LOW);
+          digitalWrite(BTN_LED_3, LOW);
+
+          noTone(buzzer);
+
+          delay(800);
+
+          break;
+        }
+      }
+    }
+
+    return true;
+  }
+  else if(digitalRead(BTN_3) == LOW){
+    delay(50);
+
+    //digitalWrite(RELAY, LOW);
+
+    uint8_t minutesPassed = 0;
+    lastExecute = millis();
+
+    while(minutesPassed < 5){
+      currentExecute = millis();
+      if(currentExecute - lastExecute > 60000){
+        lastExecute = millis();
+
+        if(rtc.getTime()){
+          writeHourToLEDMatrix(rtc.getHour(), rtc.getMinute());
+        }
+        minutesPassed++;
+      }
+
+      if(digitalRead(BTN_1) == LOW){
+        delay(50);
+        break;
+      }
+    }
+  }
+  return false;
+}
 
 void alarmDefinition() {
   displayAlarm(currentAlarm);
@@ -286,14 +452,13 @@ void alarmDefinition() {
     }
   }
 
-  Serial.println("EXITED LOOP");
-
   tft.clearScreen();
+
+  saveAlarmsToEEPROM(alarms, MAX_ALARM, 1);
 }
 
 //Calls and shows visually the selected element.
 void displayChange(){
-  Serial.println("Button pressed!");
   if (selected) {
     switch (currentOption) {
       case 0:
@@ -313,7 +478,6 @@ void displayChange(){
         break;
     }
     selected = false;
-    Serial.println("Was selected");
   } else {
     switch (currentOption) {
       case 0:
@@ -333,9 +497,6 @@ void displayChange(){
         break;
     }
   }
-  Serial.println("Had change");
-  Serial.println(currentOption);
-  Serial.println(selected);
 
   buttonOnHold(lastButton);
 }
@@ -382,14 +543,100 @@ void selected_zero(){
 }
 
 void selected_one(){
-  
+  //Pointer spacing constants
+  uint8_t selected = 0;
+
+  const uint8_t pointerY = 20;
+  const uint8_t startingXForElementPointer = 82;
+  const uint8_t pixelsBetweenNumbers = 19;
+
+  bool hadChange = false;
+  drawVerticalPointer(startingXForElementPointer, pointerY);
+
+  buttonOnHold(BTN_2);
+
+  while (true) {
+    currentExecute = millis();
+
+    if(debounce(lastExecute, currentExecute)){
+      if (digitalRead(BTN_1) == LOW && digitalRead(BTN_2) == LOW) {
+        tft.fillRect(startingXForElementPointer, pointerY, 128-startingXForElementPointer, 5, 0x0000);
+        buttonOnHold(BTN_1);
+        break;
+      }
+
+      if (digitalRead(BTN_1) == LOW) {
+        if(selected == 0){
+          uint8_t alarmHour = alarms[currentAlarm].getHour();
+
+          if(alarmHour - incrementByHour >= 0){
+            alarms[currentAlarm].setHour(alarmHour - incrementByHour);
+          }else{
+            alarms[currentAlarm].setHour(24-incrementByHour);
+          }
+        }else{
+          uint8_t alarmMinute = alarms[currentAlarm].getMinute();
+
+          if(alarmMinute - incrementByMinute >= 0){
+            alarms[currentAlarm].setMinute(alarmMinute - incrementByMinute);
+          }else{
+            alarms[currentAlarm].setMinute(60-incrementByMinute);
+          }
+        }
+
+        tft.fillRect(10, 10, 118, 8, 0x0000);
+        drawTime(alarms[currentAlarm]);
+
+        buttonOnHold(BTN_1);
+      }
+
+      if (digitalRead(BTN_2) == LOW) {
+        tft.fillRect(startingXForElementPointer, pointerY, 30, 5, 0x0000);
+
+        if (selected == 0) {
+          selected = 1;
+          drawVerticalPointer(startingXForElementPointer + pixelsBetweenNumbers, pointerY);
+        } else {
+          selected = 0;
+          drawVerticalPointer(startingXForElementPointer, pointerY);
+        }
+        
+        buttonOnHold(BTN_2);
+      }
+
+      else if (digitalRead(BTN_3) == LOW) {
+        if(selected == 0){
+          uint8_t alarmHour = alarms[currentAlarm].getHour();
+
+          if(alarmHour + incrementByHour < 24){
+            alarms[currentAlarm].setHour(alarmHour + incrementByHour);
+          }else{
+            alarms[currentAlarm].setHour(0);
+          }
+        }else{
+          uint8_t alarmMinute = alarms[currentAlarm].getMinute();
+
+          if(alarmMinute + incrementByMinute < 60){
+            alarms[currentAlarm].setMinute(alarmMinute + incrementByMinute);
+          }else{
+            alarms[currentAlarm].setMinute(0);
+          }
+        }
+
+        tft.fillRect(10, 10, 118, 8, 0x0000);
+        drawTime(alarms[currentAlarm]);
+
+        buttonOnHold(BTN_3);
+      }
+    }
+  }  
 }
 
 //Option for enabling or disabling the selected alarm
 void selected_two(){
   alarms[currentAlarm].setEnabled(!alarms[currentAlarm].getEnabled());
 
-  tft.fillRect(63, 30, 17, 8, 0x0000); //Positioned to cover only the YES/NO
+  tft.fillRect(63, 30, 18, 8, 0x0000); //Positioned to cover only the YES/NO
 
   tft.setTextColor(0xffff);
   tft.setCursor(63, 30);
@@ -451,8 +698,6 @@ void selected_three(){
 
 
       if(hadChange){
-        Serial.println("Changed weekday");
-
         hadChange = false;
         tft.fillRect(startingXForElementPointer, pointerY, 82, 5, 0x0000);
 
@@ -475,6 +720,22 @@ void drawPointer(uint8_t x, uint8_t y){
 //Draws the element selection pointer for options that require it.
 void drawVerticalPointer(uint8_t x, uint8_t y){
   tft.fillTriangle(x, y+4, x+4, y, x+8, y+4, 0xffff);
+}
+
+//Draws the alarm times.
+void drawTime(Alarm alarm){
+  tft.setCursor(10, 10);
+  tft.setTextColor(0xffff);
+
+  tft.print("Alarm Time: ");
+
+  if(alarm.getHour() < 10) tft.print("0");
+  tft.print(alarm.getHour());
+
+  tft.print(":");
+
+  if (alarm.getMinute() < 10) tft.print("0");
+  tft.print(alarm.getMinute());
 }
 
 //Draws the weekdays row.
@@ -500,6 +761,7 @@ void drawWeekdays(Alarm alarm){
 void displayAlarm(uint8_t index) {
   tft.clearScreen();
 
+  currentOption = 0;
   drawPointer(1,1);
 
   tft.setTextColor(0xFFFF);
@@ -510,18 +772,21 @@ void displayAlarm(uint8_t index) {
 
   tft.setCursor(10, 1);
   tft.print(firstLine);
-  tft.setCursor(10, 10);
-  tft.print("Alarm Time: ");
-  tft.print(alarm.getHour());
-  tft.print(":");
-  if (alarm.getMinute() < 10) tft.print("0");
-  tft.print(alarm.getMinute());
+
+  drawTime(alarm);
 
   tft.setCursor(10, 30);
   tft.print("Enabled: ");
   tft.print(alarm.getEnabled() ? "Yes" : "No");
 
   drawWeekdays(alarm);
+}
+
+void writeHourToLEDMatrix(uint8_t hour, uint8_t minute){
+  char buffer[7];
+  sprintf(buffer, " %02d:%02d", rtc.getHour(), rtc.getMinute());
+
+  mxPrint(buffer);
 }
 
 //Writes a message to the led Matrix

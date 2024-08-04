@@ -62,31 +62,25 @@ class Alarm {
       return false;
     }
 
-    // char* toString() {
-    //   static char value[100]; // Increased size to accommodate the boolean array string
-    //   char daysString[8] = ""; // Adjust size as needed
-
-    //   // Convert the boolean array to a string of '1's and '0's
-    //   for (int i = 0; i < 7; i++) {
-    //     daysString[i] = this->days[i] ? '1' : '0';
-    //   }
-    //   daysString[7] = '\0'; // Null-terminate the string
-
-    //   // Format the hour and minute as two-digit numbers
-    //   sprintf(value, "%02d:%02d | Days Mon to Sun: [%s] | Enabled: %d", this->hour, this->minute, daysString, this->enabled);
-
-    //   return value;
-    // }
-
     void setAlarm(bool days[7], uint8_t hour, uint8_t minute){
-      Serial.println("Setting alarm");
-
       for (int i = 0; i < 7; i++) {
         this->days[i] = days[i];
       }
       this->hour = hour;
       this->minute = minute;
       this->enabled = true;
+    }
+
+    void setHour(uint8_t hour){
+      if(hour <= 24 && hour >= 0){
+        this->hour = hour;
+      }
+    }
+
+    void setMinute(uint8_t minute){
+      if(minute <= 59 && minute >= 0){
+        this->minute = minute;
+      }
     }
 
     void enableDisableDay(uint8_t day){
@@ -96,11 +90,11 @@ class Alarm {
     // Method to save the alarm to EEPROM
     void saveToEEPROM(int startAddress) {
       for (int i = 0; i < 7; i++) {
-        EEPROM.write(startAddress + i, days[i]);
+        EEPROM.update(startAddress + i, days[i]);
       }
-      EEPROM.write(startAddress + 7, hour);
-      EEPROM.write(startAddress + 8, minute);
-      EEPROM.write(startAddress + 9, enabled);
+      EEPROM.update(startAddress + 7, hour);
+      EEPROM.update(startAddress + 8, minute);
+      EEPROM.update(startAddress + 9, enabled);
     }
 
     // Method to load the alarm from EEPROM
